@@ -26,6 +26,8 @@
 #include "Queue.h"
 #include "Mutex.h"
 #include "Events.h"
+#include <math.h>
+#include <stdio.h>
 #if !defined(__SOFT_FP__) && defined(__ARM_FP)
   #warning "FPU is not initialized, but the project is compiling for an FPU. Please initialize the FPU before use."
 #endif
@@ -36,26 +38,37 @@
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 
-T_TaskTCB Tarea3;
-T_TaskTCB Tarea4;
-T_TaskTCB Tarea5;
-T_TaskTCB Tarea7;
+T_TaskTCB TaskUSB;
+T_TaskTCB TaskCharge;
+T_TaskTCB TaskBat1;
+T_TaskTCB TaskBat2;
+T_TaskTCB TaskFloat;
+T_TaskTCB TaskDisplay;
+T_TaskTCB TaskUART;
 
-u32 StackTarea3[256];
-u32 StackTarea4[256];
-u32 StackTarea5[256];
-u32 StackTarea7[256];
+u32 StackTaskUSB[256];
+u32 StackTaskCharge[256];
+u32 StackTaskBat1[256];
+u32 StackTaskBat2[256];
+u32 StackTaskFloat[256];
+u32 StackTaskDisplay[256];
+u32 StackTaskUART[256];
 
 
-T_MutexHandler_Ptr Mutex_Display;
+
+ADC_ChannelConfTypeDef sConfig = {0};
+
+
+T_MutexHandler_Ptr Mutex_BAT1;
+T_MutexHandler_Ptr Mutex_BAT2;
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
-#define TEST1						0x0001
-
+#define MED_BAT						0x0001
+#define MED_USB						0x0010
 
 
 /* USER CODE END PD */
@@ -75,6 +88,14 @@ UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 
+u32 	Adc_Bat1 	= 	0;
+u32 	Adc_Bat2	= 	0;
+u8 		USB_Charge 	=	0;
+
+uint8_t MessageOled[35] = {'\0'};
+
+f Float_Bat1 = 0;
+f Float_Bat2 = 0;
 T_EventHanlder Evento;
 
 /* USER CODE END PV */
@@ -87,11 +108,13 @@ static void MX_ADC2_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
-void FunctionTarea3 (void);
-void FunctionTarea4 (void);
-void FunctionTarea5 (void);
-void FunctionTarea6 (void);
-void FunctionTarea7 (void);
+void FunctionTaskUSB (void);
+void FunctionTaskCharge (void);
+void FunctionTaskBat1 (void);
+void FunctionTaskBat2 (void);
+void FunctionTaskFloat (void);
+void FunctionTaskDisplay (void);
+void FunctionTaskUART (void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -139,12 +162,23 @@ int main(void)
   MX_I2C1_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
-	ssd1306_Init();
+	//ssd1306_Init();
 
-	ssd1306_SetColor(White);
+	//ssd1306_SetColor(White);
+
+	Mutex_Init(Mutex_BAT1);
+	Mutex_Init(Mutex_BAT2);
+
+	HAL_GPIO_WritePin(S1_GPIO_Port, S1_Pin, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(S2_GPIO_Port, S2_Pin, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(S3_GPIO_Port, S3_Pin, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(CE1_GPIO_Port, CE1_Pin, GPIO_PIN_SET);
+	HAL_GPIO_WritePin(CE2_GPIO_Port, CE2_Pin, GPIO_PIN_RESET);
 
 
-  RTOS_Start();
+
+
+  //RTOS_Start();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -154,6 +188,21 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+		sConfig.Channel = ADC_CHANNEL_7;
+		sConfig.Rank = ADC_REGULAR_RANK_1;
+		sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;
+		if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+		{
+			Error_Handler();
+		}
+		HAL_ADC_Start(&hadc2);
+		for(int i = 0; i<10000; i++);
+		Adc_Bat2 = HAL_ADC_GetValue(&hadc2);
+		Float_Bat1 = Adc_Bat2/4096.0 * 3.3 * 2;
+		u8 message[35] = {'\0'};
+		sprintf(message, "1 %.2f\r\n", Float_Bat1);
+		HAL_UART_Transmit(&huart2, message, sizeof(message), 100);
+
   }
   /* USER CODE END 3 */
 }
@@ -378,20 +427,13 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(S2_GPIO_Port, S2_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, S2_Pin|S3_Pin|CE1_Pin|CE2_Pin
+                          |S1_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, S3_Pin|CE1_Pin|CE2_Pin|S1_Pin, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin : S2_Pin */
-  GPIO_InitStruct.Pin = S2_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(S2_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : S3_Pin CE1_Pin CE2_Pin S1_Pin */
-  GPIO_InitStruct.Pin = S3_Pin|CE1_Pin|CE2_Pin|S1_Pin;
+  /*Configure GPIO pins : S2_Pin S3_Pin CE1_Pin CE2_Pin
+                           S1_Pin */
+  GPIO_InitStruct.Pin = S2_Pin|S3_Pin|CE1_Pin|CE2_Pin
+                          |S1_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -403,43 +445,236 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
-void FunctionTarea3(void){
+void FunctionTaskUSB(void){
 	for(;;)
 	{
+		// Set up channel 4 (USB measure)
+		  sConfig.Channel = ADC_CHANNEL_4;
+		  sConfig.Rank = ADC_REGULAR_RANK_1;
+		  sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;
+		  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+		  {
+		    Error_Handler();
+		  }
+		  HAL_ADC_Start(&hadc1);
+		  Task_Sleep(1);
+		  u32 Adc_usb = HAL_ADC_GetValue(&hadc1);
+		  if(Adc_usb > 2482){
+			  USB_Charge = 1;}
+		  else {USB_Charge = 0;}
+		  Events_Set(&Evento, MED_USB);
+
 
 	}
 }
-void FunctionTarea4(void){
+void FunctionTaskCharge(void){
 	for(;;)
 	{
+		Events_WaitAll(&Evento, MED_USB);
+		Events_Clear(&Evento, MED_USB);
+		if(USB_Charge == 1)
+		{
+			//Aislar baterias
+			HAL_GPIO_WritePin(CE1_GPIO_Port, CE1_Pin, GPIO_PIN_RESET);
+			HAL_GPIO_WritePin(CE2_GPIO_Port, CE2_Pin, GPIO_PIN_RESET);
+			HAL_GPIO_WritePin(S1_GPIO_Port, S1_Pin, GPIO_PIN_SET);
+			HAL_GPIO_WritePin(S2_GPIO_Port, S2_Pin, GPIO_PIN_SET);
+			HAL_GPIO_WritePin(S3_GPIO_Port, S3_Pin, GPIO_PIN_RESET);
 
+			//esperar por medicion de baterias
+			Events_WaitAll(&Evento, MED_BAT);
+			Events_Clear(&Evento, MED_BAT);
+			while((USB_Charge == 1) && (fabs(Float_Bat1 - Float_Bat2) > 0.01))
+			{
+				//aislar bateria 1 de 2
+				HAL_GPIO_WritePin(S1_GPIO_Port, S1_Pin, GPIO_PIN_RESET);
+				HAL_GPIO_WritePin(S2_GPIO_Port, S2_Pin, GPIO_PIN_RESET);
+				HAL_GPIO_WritePin(S3_GPIO_Port, S3_Pin, GPIO_PIN_RESET);
+				sprintf(MessageOled, "Baterias aisladas cargando\r\n");
+				//Iniciar carga de ambas
+				HAL_GPIO_WritePin(CE1_GPIO_Port, CE1_Pin, GPIO_PIN_SET);
+				HAL_GPIO_WritePin(CE2_GPIO_Port, CE2_Pin, GPIO_PIN_SET);
+				Task_Sleep(3);
+				Events_WaitAll(&Evento, MED_USB);
+				Events_Clear(&Evento, MED_USB);
+				Events_WaitAll(&Evento, MED_BAT);
+				Events_Clear(&Evento, MED_BAT);
+			}
+			//Deshabilitar carga
+			while( (USB_Charge == 1) && (Float_Bat1 >= 4.1 ) && (fabs(Float_Bat1 - Float_Bat2) < 0.01) )// Bat 1 y Bat 2 mayor o igual a 4 V
+			{
+				// deshabilitar carga
+				HAL_GPIO_WritePin(CE1_GPIO_Port, CE1_Pin, GPIO_PIN_RESET);
+				HAL_GPIO_WritePin(CE2_GPIO_Port, CE2_Pin, GPIO_PIN_RESET);
+				// Poner baterias en paralelo
+				HAL_GPIO_WritePin(S1_GPIO_Port, S1_Pin, GPIO_PIN_SET);
+				HAL_GPIO_WritePin(S2_GPIO_Port, S2_Pin, GPIO_PIN_SET);
+				HAL_GPIO_WritePin(S3_GPIO_Port, S3_Pin, GPIO_PIN_SET);
+				sprintf(MessageOled, "Baterias en paralelo\r\n");
+				Task_Sleep(3);
+				Events_WaitAll(&Evento, MED_USB);
+				Events_Clear(&Evento, MED_USB);
+				Events_WaitAll(&Evento, MED_BAT);
+				Events_Clear(&Evento, MED_BAT);
+			}
+			while( (USB_Charge == 1) && (Float_Bat1 < 4.1 ) && (fabs(Float_Bat1 - Float_Bat2) < 0.01)  ) // BAT1 y BAT2 menor a 4 v
+			{
+					//Poner baterias en paralelo
+				HAL_GPIO_WritePin(S3_GPIO_Port, S3_Pin, GPIO_PIN_SET);
+				sprintf(MessageOled, "Baterias en paralelo cargando\r\n");
+					//quitar bateria 2 de cargador 2
+				HAL_GPIO_WritePin(S2_GPIO_Port, S2_Pin, GPIO_PIN_RESET);
+					//Cargar ambas baterias con cargador 1
+				HAL_GPIO_WritePin(S1_GPIO_Port, S1_Pin, GPIO_PIN_RESET);
+				HAL_GPIO_WritePin(CE1_GPIO_Port, CE1_Pin, GPIO_PIN_SET);
+				HAL_GPIO_WritePin(CE2_GPIO_Port, CE2_Pin, GPIO_PIN_RESET);
+				Task_Sleep(3);
+				Events_WaitAll(&Evento, MED_USB);
+				Events_Clear(&Evento, MED_USB);
+				Events_WaitAll(&Evento, MED_BAT);
+				Events_Clear(&Evento, MED_BAT);
+			}
+		}
+		else
+		{
+			Events_WaitAll(&Evento, MED_BAT);
+			Task_Sleep(10);
+			Events_Clear(&Evento, MED_BAT);
+			while ((fabs(Float_Bat1 - Float_Bat2) > 0.1) && (USB_Charge = 0))
+			{
+				//Mensaje para conectar cargador
+				sprintf(MessageOled, "Conectar cargador\r\n");
+
+				//Aislar baterias
+				HAL_GPIO_WritePin(CE1_GPIO_Port, CE1_Pin, GPIO_PIN_RESET);
+				HAL_GPIO_WritePin(CE2_GPIO_Port, CE2_Pin, GPIO_PIN_RESET);
+				HAL_GPIO_WritePin(S1_GPIO_Port, S1_Pin, GPIO_PIN_SET);
+				HAL_GPIO_WritePin(S2_GPIO_Port, S2_Pin, GPIO_PIN_SET);
+				HAL_GPIO_WritePin(S3_GPIO_Port, S3_Pin, GPIO_PIN_RESET);
+
+				Task_Sleep(3);
+				Events_WaitAll(&Evento, MED_USB);
+				Events_Clear(&Evento, MED_USB);
+				Events_WaitAll(&Evento, MED_BAT);
+				Events_Clear(&Evento, MED_BAT);
+			}
+			while ( (fabs(Float_Bat1 - Float_Bat2) <= 0.1) && (USB_Charge = 0))
+			{
+				//Baterias en paralelo
+				HAL_GPIO_WritePin(CE1_GPIO_Port, CE1_Pin, GPIO_PIN_RESET);
+				HAL_GPIO_WritePin(CE2_GPIO_Port, CE2_Pin, GPIO_PIN_RESET);
+				HAL_GPIO_WritePin(S1_GPIO_Port, S1_Pin, GPIO_PIN_SET);
+				HAL_GPIO_WritePin(S2_GPIO_Port, S2_Pin, GPIO_PIN_SET);
+				HAL_GPIO_WritePin(S3_GPIO_Port, S3_Pin, GPIO_PIN_SET);
+				sprintf(MessageOled, "Baterias en paralelo\r\n");
+				//Mensaje de baterias balanceadas
+				Task_Sleep(3);
+				Events_WaitAll(&Evento, MED_USB);
+				Events_Clear(&Evento, MED_USB);
+				Events_WaitAll(&Evento, MED_BAT);
+				Events_Clear(&Evento, MED_BAT);
+			}
+		}
+		HAL_GPIO_WritePin(CE1_GPIO_Port, CE1_Pin, GPIO_PIN_RESET);
+		HAL_GPIO_WritePin(CE2_GPIO_Port, CE2_Pin, GPIO_PIN_RESET);
 	}
 }
 
-void FunctionTarea5(void){
+void FunctionTaskBat1(void){
 
 	for(;;)
 	{
+		//borrar bandera de envento
+		Mutex_Take(Mutex_BAT1);
+		sConfig.Channel = ADC_CHANNEL_7;
+		sConfig.Rank = ADC_REGULAR_RANK_1;
+		sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;
+		if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+		{
+			Error_Handler();
+		}
+		HAL_ADC_Start(&hadc1);
+		Task_Sleep(1);
+		Adc_Bat1 = HAL_ADC_GetValue(&hadc1);
+		Mutex_Give(Mutex_BAT1);
+		Task_Sleep(10);
 
 	}
 
 }
 
-void FunctionTarea6(void)
+void FunctionTaskBat2(void)
 {
 
 	while(1)
 	{
+		Mutex_Take(Mutex_BAT1);
+		HAL_ADC_Start(&hadc2);
+		Task_Sleep(1);
+		Adc_Bat2 = HAL_ADC_GetValue(&hadc2);
+		Mutex_Give(Mutex_BAT1);
+		Task_Sleep(10);
+
+	}
+}
+void FunctionTaskFloat(void)
+{
+	while(1)
+	{
+		Mutex_Take(Mutex_BAT1);
+		Mutex_Take(Mutex_BAT2);
+		Float_Bat1 = Adc_Bat2/4096.0 * 3.3 * 2;
+		Float_Bat2 = Adc_Bat2/4096.0 * 3.3 * 2;
+		Events_Set(&Evento, MED_BAT);
+		Mutex_Give(Mutex_BAT1);
+		Mutex_Give(Mutex_BAT2);
+		Task_Sleep(5);
+	}
+}
+
+void FunctionTaskDisplay(void)
+{
+	while(1)
+	{
+		HAL_UART_Transmit(&huart2, MessageOled, sizeof(MessageOled), 100);
+		Task_Sleep(10);
+	}
+	{
+
+		ssd1306_Clear();
+
+		ssd1306_SetCursor(50, 15);
+		ssd1306_WriteString("Voltaje Bateria 1: ",Font_7x10);
+		i len = snprintf(NULL, 0, "%f", Float_Bat1);
+		c *result = malloc(len + 1);
+		snprintf(result, len + 1, "%.2f\r\n", Float_Bat1);
+		ssd1306_WriteString(result,Font_7x10);
+
+		ssd1306_SetCursor(60, 15);
+		ssd1306_WriteString("Voltaje Bateria 2: ",Font_7x10);
+		len = snprintf(NULL, 0, "%f", Float_Bat2);
+		result = malloc(len + 1);
+		snprintf(result, len + 1, "%.2f\r\n", Float_Bat2);
+		ssd1306_WriteString(result,Font_7x10);
+
+		Task_Sleep(10);
+		ssd1306_UpdateScreen();
 
 
 	}
 }
 
-void FunctionTarea7(void)
+void FunctionTaskUART(void)
 {
 	while(1)
 	{
 
+		  u8 message[35] = {'\0'};
+		  sprintf(message, "1 %.2f\r\n", Float_Bat1);
+		  HAL_UART_Transmit(&huart2, message, sizeof(message), 100);
+		  sprintf(message, "2 %.2f\r\n", Float_Bat2);
+		  HAL_UART_Transmit(&huart2, message, sizeof(message), 100);
+		  Task_Sleep(500);
 
 
 	}
